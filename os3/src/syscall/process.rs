@@ -1,8 +1,8 @@
 //! Process management syscalls
 
 use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus};
-use crate::timer::get_time_us;
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, read_cur_task_block, syscall_times_transfer};
+use crate::timer::{get_time_us};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -44,5 +44,13 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    -1
+    let block = read_cur_task_block();
+    unsafe {
+        *ti = TaskInfo {
+            status: block.task_status,
+            time: (get_time_us() - block.time) / 1000,
+            syscall_times: syscall_times_transfer(&block.syscall_times)
+        }
+    }
+    0
 }
