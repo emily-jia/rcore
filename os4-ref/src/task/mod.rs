@@ -14,8 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -79,6 +82,8 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.time = get_time_us();
+
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -134,6 +139,7 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            inner.tasks[next].time = if inner.tasks[next].time == 0 {get_time_us()} else { inner.tasks[next].time };
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -190,4 +196,52 @@ pub fn current_user_token() -> usize {
 /// Get the current 'Running' task's trap contexts.
 pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
+}
+
+pub fn read_cur_taskinfo() -> (TaskStatus, usize, [u32; MAX_SYSCALL_NUM]) {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    let block = &inner.tasks[inner.current_task];
+    (block.task_status, block.time, block.syscall_times.clone())
+}
+
+pub fn update_syscall(syscall_id: usize) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let pid = inner.current_task;
+    inner.tasks[pid].syscall_times[syscall_id] += 1;
+}
+
+pub fn map(st_va: usize, ed_va: usize, port:usize) -> bool{
+    let mut inner = TASK_MANAGER.inner.exclusive_access(); 
+    let pid = inner.current_task;
+    debug!("{} mapping {} {} {} ...", pid, st_va, ed_va, port);
+
+    // check port
+    if port & 0x7 == 0 {
+        return false;
+    } else if port & !0x7 != 0 {
+        return false;
+    }
+
+    let flags = ((port & 0x7) << 1) as u8;
+    let permission = MapPermission::from_bits_truncate(flags) | MapPermission::U;
+
+    
+    let block = &mut inner.tasks[pid];
+    let mem_set = &mut block.memory_set;
+
+    // insert
+    mem_set.test_insert_area(VirtAddr::from(st_va), VirtAddr::from(ed_va), permission)
+}
+
+pub fn unmap(st_va: usize, ed_va: usize) -> bool {
+    let mut inner = TASK_MANAGER.inner.exclusive_access(); 
+    let pid = inner.current_task;
+    debug!("{} unmapping {} {} ...", pid, st_va, ed_va);
+
+    
+    let block = &mut inner.tasks[pid];
+    let mem_set = &mut block.memory_set;
+
+    // remove
+    mem_set.test_remove_area(VirtAddr::from(st_va), VirtAddr::from(ed_va))
 }

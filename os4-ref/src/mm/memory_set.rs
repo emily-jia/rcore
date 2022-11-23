@@ -1,5 +1,7 @@
 //! Implementation of [`MapArea`] and [`MemorySet`].
 
+use core::iter::Map;
+
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
@@ -47,6 +49,37 @@ impl MemorySet {
     pub fn token(&self) -> usize {
         self.page_table.token()
     }
+    // LAB4 
+    pub fn test_insert_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> bool {
+        let mut area = MapArea::new(start_va, end_va, MapType::Framed, permission);
+        if !area.test_map(&self.page_table) {
+            return false;
+        }
+        self.push(area, None);
+        true
+    }
+
+    pub fn test_remove_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ) -> bool {
+        let mut area = MapArea::new(start_va, end_va, MapType::Framed, MapPermission::U);
+        if !area.test_unmap(&self.page_table) {
+            return false;
+        }
+        area.unmap(&mut self.page_table);
+        // TODO: real remove from memset
+        debug!("aft unmap {}", area.test_map(&self.page_table));
+        true
+    }
+    // LAB4 END
+
     /// Assume that no conflicts.
     pub fn insert_framed_area(
         &mut self,
@@ -236,6 +269,7 @@ impl MapArea {
     ) -> Self {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
+        debug!("area {} {}", start_vpn.0, end_vpn.0);
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
             data_frames: BTreeMap::new(),
@@ -269,6 +303,39 @@ impl MapArea {
         }
         page_table.unmap(vpn);
     }
+
+    // LAB 4
+    pub fn test_unmap(&mut self, page_table: &PageTable) -> bool {
+        for vpn in self.vpn_range {
+            let op = page_table.find_pte(vpn);
+            match op {
+                None => return false,
+                Some(pte) => {
+                    if !pte.is_valid() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    pub fn test_map(&mut self, page_table: &PageTable) -> bool {
+        for vpn in self.vpn_range {
+            let op = page_table.find_pte(vpn);
+            match op {
+                None => (),
+                Some(pte) => {
+                    if pte.is_valid() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+    // LAB 4 END
+
     pub fn map(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
             self.map_one(page_table, vpn);
